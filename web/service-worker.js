@@ -1,10 +1,11 @@
-const CACHE_NAME = 'food-order-v7';
+const CACHE_NAME = 'food-order-v8';
 const CORE_ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js',
   './data.js',
+  './supabase-config.js',
   './manifest.json'
 ];
 

@@ -1,3 +1,5 @@
+let supabaseClient = null;
+
 const App = {
   state: {
     currentTab: 'menu',
@@ -12,9 +14,6 @@ const App = {
     onlineCount: 0,
   },
 
-  ws: null,
-  wsReconnectTimer: null,
-
   STORAGE_KEYS: {
     CART: 'food_web_cart',
     ORDERS: 'food_web_orders',
@@ -26,7 +25,7 @@ const App = {
     this.loadFromStorage();
     this.bindEvents();
     this.render();
-    this.initWebSocket();
+    this.initSync();
     // 支持 URL 参数切换标签 (PWA 快捷方式)
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
@@ -35,104 +34,108 @@ const App = {
     }
   },
 
-  // ===== WebSocket 实时同步 =====
-  initWebSocket() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws`;
-    try {
-      this.ws = new WebSocket(wsUrl);
-    } catch (e) {
-      console.warn('WebSocket 连接失败，使用离线模式');
+  // ===== Supabase 实时同步 =====
+  initSync() {
+    if (typeof SUPABASE_URL === 'undefined' || !SUPABASE_URL ||
+        typeof SUPABASE_ANON_KEY === 'undefined' || !SUPABASE_ANON_KEY) {
+      console.warn('Supabase 未配置，使用离线模式');
       this.updateConnectionStatus(false);
       return;
     }
-
-    this.ws.onopen = () => {
-      this.state.wsConnected = true;
-      this.updateConnectionStatus(true);
-      // 发送当前用户信息
-      this.sendWsMessage({ type: 'set_info', name: this.state.userName, role: this.state.role });
-    };
-
-    this.ws.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        this.handleWsMessage(data);
-      } catch (err) { console.error('WS message error:', err); }
-    };
-
-    this.ws.onclose = () => {
-      this.state.wsConnected = false;
+    try {
+      supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      this.loadOrdersFromDB();
+      this.subscribeToChanges();
+    } catch (e) {
+      console.error('Supabase 初始化失败:', e);
       this.updateConnectionStatus(false);
-      // 自动重连（3秒后）
-      this.wsReconnectTimer = setTimeout(() => this.initWebSocket(), 3000);
-    };
-
-    this.ws.onerror = () => {
-      this.state.wsConnected = false;
-      this.updateConnectionStatus(false);
-    };
-  },
-
-  sendWsMessage(data) {
-    if (this.ws && this.ws.readyState === 1) {
-      this.ws.send(JSON.stringify(data));
     }
   },
 
-  handleWsMessage(data) {
-    switch (data.type) {
-      case 'sync':
-        // 全量同步订单
-        this.state.orders = data.orders || [];
-        this.saveOrders();
-        this.renderOrders();
-        this.renderMine();
-        break;
+  async loadOrdersFromDB() {
+    if (!supabaseClient) return;
+    try {
+      const { data, error } = await supabaseClient
+        .from('orders')
+        .select('*')
+        .order('created', { ascending: false });
+      if (error) throw error;
+      this.state.orders = (data || []).map(o => ({
+        id: o.id,
+        items: o.items || [],
+        total: o.total || 0,
+        count: o.count || 0,
+        status: o.status || 'pending',
+        customerName: o.customer_name || '匿名',
+        createdAt: o.created_at || '',
+        created: o.created || 0
+      }));
+      this.saveOrders();
+      this.renderOrders();
+      this.renderMine();
+    } catch (err) {
+      console.error('加载订单失败:', err);
+    }
+  },
 
-      case 'order_added':
-        // 新订单添加（来自其他用户）
-        if (!this.state.orders.find(o => o.id === data.order.id)) {
-          this.state.orders.unshift(data.order);
+  subscribeToChanges() {
+    if (!supabaseClient) return;
+    supabaseClient
+      .channel('orders_channel')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
+        const o = payload.new;
+        const order = {
+          id: o.id, items: o.items || [], total: o.total || 0, count: o.count || 0,
+          status: o.status || 'pending', customerName: o.customer_name || '匿名',
+          createdAt: o.created_at || '', created: o.created || 0
+        };
+        if (!this.state.orders.find(x => x.id === order.id)) {
+          this.state.orders.unshift(order);
           this.saveOrders();
           this.renderOrders();
           this.renderMine();
-          // 如果当前不在订单页面，显示提示
           if (this.state.currentTab !== 'orders') {
-            this.showToast(`🛎 ${data.order.customerName} 新下了订单`);
+            this.showToast(`🛎 ${order.customerName} 新下了订单`);
+          }
+          if (this.state.role === 'merchant') {
+            this.showNotification(`新订单来自 ${order.customerName}，共 ${order.count} 份菜品，¥${order.total}`);
           }
         }
-        break;
-
-      case 'status_updated':
-        // 订单状态更新
-        const order = this.state.orders.find(o => o.id === data.orderId);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, (payload) => {
+        const o = payload.new;
+        const order = this.state.orders.find(x => x.id === o.id);
         if (order) {
-          order.status = data.status;
+          const oldStatus = order.status;
+          order.status = o.status;
           this.saveOrders();
           this.renderOrders();
+          if (this.state.role === 'customer' && oldStatus !== o.status) {
+            const msgs = {
+              preparing: `您的订单 #${o.id.slice(-6)} 商家已开始制作！`,
+              ready: `您的订单 #${o.id.slice(-6)} 已完成，请准备取餐！`,
+              cancelled: `您的订单 #${o.id.slice(-6)} 已取消`
+            };
+            if (msgs[o.status]) this.showNotification(msgs[o.status]);
+          }
         }
-        break;
-
-      case 'order_deleted':
-        this.state.orders = this.state.orders.filter(o => o.id !== data.orderId);
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'orders' }, (payload) => {
+        this.state.orders = this.state.orders.filter(o => o.id !== payload.old.id);
         this.saveOrders();
         this.renderOrders();
         this.renderMine();
-        break;
-
-      case 'notification':
-        // 实时通知
-        if (!data.targetRole || data.targetRole === this.state.role) {
-          this.showNotification(data.message);
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          this.state.wsConnected = true;
+          this.updateConnectionStatus(true);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          this.state.wsConnected = false;
+          this.updateConnectionStatus(false);
+          setTimeout(() => { if (supabaseClient) this.subscribeToChanges(); }, 3000);
         }
-        break;
-
-      case 'online_count':
-        this.state.onlineCount = data.count;
-        this.updateOnlineCount();
-        break;
-    }
+      });
   },
 
   updateConnectionStatus(connected) {
@@ -202,7 +205,6 @@ const App = {
   setRole(role) {
     this.state.role = role;
     localStorage.setItem(this.STORAGE_KEYS.ROLE, role);
-    this.sendWsMessage({ type: 'set_info', name: this.state.userName, role: role });
     this.renderMine();
     this.renderOrders();
   },
@@ -210,7 +212,6 @@ const App = {
   setName(name) {
     this.state.userName = name;
     localStorage.setItem(this.STORAGE_KEYS.NAME, name);
-    this.sendWsMessage({ type: 'set_info', name: name, role: this.state.role });
     this.renderMine();
   },
 
@@ -278,13 +279,13 @@ const App = {
     this.updateCartBadge();
   },
 
-  submitOrder() {
+  async submitOrder() {
     if (this.state.cart.length === 0) {
       this.showToast('购物车是空的');
       return;
     }
     const order = {
-      id: 'order_' + Date.now(),
+      id: 'order_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       items: JSON.parse(JSON.stringify(this.state.cart)),
       total: Math.round(this.getCartTotal() * 100) / 100,
       count: this.getCartCount(),
@@ -293,9 +294,25 @@ const App = {
       createdAt: new Date().toLocaleString('zh-CN'),
       created: Date.now()
     };
-    // 通过 WebSocket 发送到服务器
-    if (this.state.wsConnected) {
-      this.sendWsMessage({ type: 'new_order', order: order });
+    // 通过 Supabase 写入数据库
+    if (supabaseClient && this.state.wsConnected) {
+      try {
+        const { error } = await supabaseClient.from('orders').insert({
+          id: order.id,
+          items: order.items,
+          total: order.total,
+          count: order.count,
+          status: order.status,
+          customer_name: order.customerName,
+          created_at: order.createdAt,
+          created: order.created
+        });
+        if (error) throw error;
+      } catch (err) {
+        console.error('下单失败:', err);
+        this.showToast('下单失败，请重试');
+        return;
+      }
     } else {
       // 离线模式：仅保存到本地
       this.state.orders.unshift(order);
@@ -309,18 +326,25 @@ const App = {
     this.showToast('下单成功！');
   },
 
-  updateOrderStatus(orderId, status) {
+  async updateOrderStatus(orderId, status) {
     const order = this.state.orders.find(o => o.id === orderId);
-    if (order) {
-      order.status = status;
-      this.saveOrders();
-      this.renderOrders();
-      // 通过 WebSocket 同步状态
-      if (this.state.wsConnected) {
-        this.sendWsMessage({ type: 'update_status', orderId: orderId, status: status });
+    if (!order) return;
+    order.status = status;
+    this.saveOrders();
+    this.renderOrders();
+    // 通过 Supabase 更新状态
+    if (supabaseClient && this.state.wsConnected) {
+      try {
+        const { error } = await supabaseClient
+          .from('orders')
+          .update({ status: status })
+          .eq('id', orderId);
+        if (error) throw error;
+      } catch (err) {
+        console.error('更新状态失败:', err);
       }
-      this.showToast('状态已更新');
     }
+    this.showToast('状态已更新');
   },
 
   getStatusText(status) {
@@ -358,14 +382,22 @@ const App = {
     return this.state.orders.filter(o => o.status === status);
   },
 
-  deleteOrder(orderId) {
+  async deleteOrder(orderId) {
     this.state.orders = this.state.orders.filter(o => o.id !== orderId);
     this.saveOrders();
     this.renderOrders();
     this.renderMine();
-    // 通过 WebSocket 同步删除
-    if (this.state.wsConnected) {
-      this.sendWsMessage({ type: 'delete_order', orderId: orderId });
+    // 通过 Supabase 删除订单
+    if (supabaseClient && this.state.wsConnected) {
+      try {
+        const { error } = await supabaseClient
+          .from('orders')
+          .delete()
+          .eq('id', orderId);
+        if (error) throw error;
+      } catch (err) {
+        console.error('删除订单失败:', err);
+      }
     }
   },
 
@@ -569,15 +601,23 @@ const App = {
     reader.readAsText(file);
   },
 
-  clearAllData() {
+  async clearAllData() {
     if (!confirm('确定清空所有数据？此操作不可恢复！')) return;
     localStorage.removeItem(this.STORAGE_KEYS.CART);
     localStorage.removeItem(this.STORAGE_KEYS.ORDERS);
     localStorage.removeItem(this.STORAGE_KEYS.ROLE);
     localStorage.removeItem(this.STORAGE_KEYS.NAME);
-    // 如果是商家且已连接，清空服务器上的所有订单
-    if (this.state.wsConnected && this.state.role === 'merchant') {
-      this.sendWsMessage({ type: 'clear_orders' });
+    // 如果是商家且已连接，清空数据库中的所有订单
+    if (supabaseClient && this.state.wsConnected && this.state.role === 'merchant') {
+      try {
+        const { error } = await supabaseClient
+          .from('orders')
+          .delete()
+          .neq('id', '');
+        if (error) throw error;
+      } catch (err) {
+        console.error('清空订单失败:', err);
+      }
     }
     this.state.cart = [];
     this.state.orders = [];
@@ -1044,7 +1084,7 @@ const App = {
       </div>
 
       <div class="app-footer">
-        <p>🍜 家常菜馆 Web版 v3.0</p>
+        <p>🍜 家常菜馆 Web版 v4.0</p>
         <p>支持实时同步 · 多人在线点单</p>
       </div>
     `;

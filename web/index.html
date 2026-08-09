@@ -42,7 +42,7 @@
       </nav>
       <div class="sidebar__footer">
         <p>朋友聚餐点单神器</p>
-        <p class="sidebar__version">v3.0 · 实时同步</p>
+        <p class="sidebar__version">v4.0 · 实时同步</p>
       </div>
     </aside>
 
@@ -82,8 +82,10 @@
   <!-- 实时连接状态指示器 -->
   <div id="connStatus" class="conn-status disconnected" title="离线模式"></div>
 
-  <script src="data.js?v3"></script>
-  <script src="app.js?v3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="data.js?v4"></script>
+  <script src="supabase-config.js?v4"></script>
+  <script src="app.js?v4"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function() {

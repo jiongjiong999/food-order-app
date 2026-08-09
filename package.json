@@ -1,0 +1,16 @@
+{
+  "name": "food-order-app",
+  "version": "3.0.0",
+  "description": "家常菜馆 · 在线点单系统（实时同步）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "license": "ISC"
+}

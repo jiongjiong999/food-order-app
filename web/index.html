@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#FF6B35">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="家常菜馆">
+  <title>家常菜馆 · 在线点单</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css?v3">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍜</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍜</text></svg>">
+</head>
+<body>
+  <div id="app" class="app">
+    <!-- 侧边栏导航 (桌面端) -->
+    <aside class="sidebar">
+      <div class="sidebar__brand">
+        <span class="sidebar__logo">🍜</span>
+        <span class="sidebar__name">家常菜馆</span>
+      </div>
+      <nav class="sidebar__nav">
+        <button class="sidebar__item active" data-tab="menu">
+          <span class="sidebar__icon">🍜</span>
+          <span class="sidebar__label">菜单</span>
+        </button>
+        <button class="sidebar__item" data-tab="cart">
+          <span class="sidebar__icon">🛒</span>
+          <span class="sidebar__label">购物车</span>
+          <span class="badge sidebar__badge"></span>
+        </button>
+        <button class="sidebar__item" data-tab="orders">
+          <span class="sidebar__icon">📋</span>
+          <span class="sidebar__label">订单</span>
+        </button>
+        <button class="sidebar__item" data-tab="mine">
+          <span class="sidebar__icon">👤</span>
+          <span class="sidebar__label">我的</span>
+        </button>
+      </nav>
+      <div class="sidebar__footer">
+        <p>朋友聚餐点单神器</p>
+        <p class="sidebar__version">v3.0 · 实时同步</p>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main id="main-content" class="main">
+      <section id="menuPage" class="page page--active"></section>
+      <section id="cartPage" class="page"></section>
+      <section id="ordersPage" class="page"></section>
+      <section id="minePage" class="page"></section>
+    </main>
+  </div>
+
+  <!-- 底部导航 (手机端) -->
+  <nav class="tab-bar">
+    <button class="tab-bar__item active" data-tab="menu">
+      <span class="tab-bar__icon">🍜</span>
+      <span class="tab-bar__label">菜单</span>
+    </button>
+    <button class="tab-bar__item" data-tab="cart">
+      <span class="tab-bar__icon">🛒</span>
+      <span class="tab-bar__label">购物车</span>
+      <span class="badge"></span>
+    </button>
+    <button class="tab-bar__item" data-tab="orders">
+      <span class="tab-bar__icon">📋</span>
+      <span class="tab-bar__label">订单</span>
+    </button>
+    <button class="tab-bar__item" data-tab="mine">
+      <span class="tab-bar__icon">👤</span>
+      <span class="tab-bar__label">我的</span>
+    </button>
+  </nav>
+
+  <!-- 菜品详情弹窗 -->
+  <div id="dishDetailModal" class="detail-overlay"></div>
+
+  <!-- 实时连接状态指示器 -->
+  <div id="connStatus" class="conn-status disconnected" title="离线模式"></div>
+
+  <script src="data.js?v3"></script>
+  <script src="app.js?v3"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('./service-worker.js').then(function(reg) {
+          console.log('Service Worker 已注册，离线模式可用');
+        }).catch(function(err) {
+          console.error('Service Worker 注册失败:', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
